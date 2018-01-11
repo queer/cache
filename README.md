@@ -1,23 +1,16 @@
 # Cache
 
-**TODO: Actually rename this too**
+Distributed Discord entity cache handler.
 
-**TODO: Add description**
+## Configuration
 
-## Installation
-
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `cache` to your list of dependencies in `mix.exs`:
-
-```elixir
-def deps do
-  [
-    {:cache, "~> 0.1.0"}
-  ]
-end
+```Bash
+# This MUST be the same between backend and cache!
+CACHE_QUEUE="memes2"
+SENTRY_DSN="your dsn here"
+# Default "dev"
+ENV_NAME="prod"
+REDIS_IP="redis"
+REDIS_PASS="a"
+CACHE_DATABASE="discord-cache"
 ```
-
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at [https://hexdocs.pm/cache](https://hexdocs.pm/cache).
-
