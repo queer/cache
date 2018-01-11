@@ -26,6 +26,7 @@ defmodule Cache.Mixfile do
       {:poolboy, ">= 0.0.0"},
       {:poison, "~> 3.1"},
       {:lace, github: "queer/lace"},
+      {:sentry, "~> 6.0.5"},
     ]
   end
 end

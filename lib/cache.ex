@@ -28,19 +28,17 @@ defmodule Cache do
     unless data == :undefined do
       Logger.debug "Got cache event: #{data}"
       event = data |> Poison.decode!
-      process_event event
+      try do
+        process_event event
+      rescue
+        e -> Sentry.capture_exception e, [stacktrace: System.stacktrace()]
+      end
     end
   end
 
   ####################
   # Helper functions #
   ####################
-
-  defp update_many(collection, list) do
-    unless length(list) == 0 do
-      Mongo.update_many :mongo, collection, list, [pool: DBConnection.Poolboy, continue_on_error: true, upsert: true]
-    end
-  end
 
   defp update_guild(raw_guild) do
     {channels,      raw_guild} = Map.pop(raw_guild, "channels")
@@ -66,7 +64,8 @@ defmodule Cache do
     |> update_emojis
 
     # Dump it into db
-    Mongo.update_one(:mongo, @guild_cache, %{"id": raw_guild["id"]}, %{"$set": raw_guild}, [pool: DBConnection.Poolboy, upsert: true])
+    Mongo.update_one(:mongo, @guild_cache, %{"id": raw_guild["id"]}, 
+      %{"$set": raw_guild}, [pool: DBConnection.Poolboy, upsert: true])
     update_members_and_users raw_guild["id"], members
 
     update_channels channels
@@ -90,6 +89,17 @@ defmodule Cache do
 
   defp update_emojis(emojis) do
     update_many @emoji_cache, emojis
+  end
+
+  defp update_many(collection, list) do
+    unless length(list) == 0 do
+      # So this is really bad, but apparently making a nice update_many filter 
+      # will be god-awful :(
+      for snowflake <- list do
+        Mongo.update_one :mongo, collection, %{"id": snowflake["id"]}, %{"$set": snowflake}, 
+          [pool: DBConnection.Poolboy, upsert: true]
+      end
+    end
   end
 
   defp update_members_and_users(guild_id, list) do
@@ -124,9 +134,9 @@ defmodule Cache do
       end
   end
 
-  defp member_to_user(guild, member) do
+  defp member_to_user(guild_id, member) do
     {user, member} = Map.pop member, "user"
-    member = member |> Map.put("guild", guild["id"])
+    member = member |> Map.put("guild", guild_id)
                     |> Map.put("user", user["id"])
     {user, member}
   end
@@ -147,7 +157,11 @@ defmodule Cache do
   end
 
   defp process_event(%{"t" => "GUILD_UPDATE"} = event) do
-    update_guild event["d"]
+    raw_guild = event["d"]
+    # GUILD_UPDATE doesn't contain anywhere NEAR as much as GUILD_CREATE does,
+    # so we only update the guild cache
+    Mongo.update_one(:mongo, @guild_cache, %{"id": raw_guild["id"]}, 
+      %{"$set": raw_guild}, [pool: DBConnection.Poolboy, upsert: true])
   end
 
   defp process_event(%{"t" => "GUILD_DELETE"} = event) do
