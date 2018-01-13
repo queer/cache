@@ -1,4 +1,14 @@
 defmodule Cache do
+  @moduledoc """
+  ## Some things to note
+
+  - As of writing, there's no efficient user-reference-counting that I've
+    figured out for allowing pruning useres from the cache. At best they all 
+    turn into O(3N) or so, and that's an issue because sometimes N = 50000. 
+    Can't just use a Redis ZSET for reference-counting, because references will
+    duplicate every time a shard (re)starts. 
+  """
+
   alias Lace.Redis
   require Logger
 
@@ -8,7 +18,6 @@ defmodule Cache do
   @emoji_cache "emoji_cache"
 
   @user_hash "users"
-  @user_zset "users-rc"
   
   ##################
   # Main functions #
@@ -17,8 +26,8 @@ defmodule Cache do
   def process do
     spawn fn -> get_event() end
     # Don't abuse redis too much
-    # Artificially limit us to 100/s throughput
-    Process.sleep 10
+    # Artificially limit us to 1000/s throughput
+    Process.sleep 1
     process()
   end
 
@@ -119,16 +128,13 @@ defmodule Cache do
   corresponds to the guild. This is so that we can trivially do do a 
   fast-delete of all a guild's members, while still not losing the ability to
   query this info based on guild id
-
-  User info is stored in a global hash, and uses a zset for reference-counting 
-  users so that we can figure out when to add/remove them from the cache
   """
   defp handle_user_chunk(guild_id, chunk) do
     guild_key = "guild:#{guild_id}:members"
     Redis.t fn(worker) -> 
         for {user, member} <- chunk do
           Redis.q worker, ["HSET", @user_hash, user["id"], Poison.encode!(user)]
-          Redis.q worker, ["ZINCRBY", @user_zset, 1, user["id"]]
+          #Redis.q worker, ["ZINCRBY", @user_zset, 1, user["id"]]
           Redis.q worker, ["HSET", guild_key, user["id"], Poison.encode!(member)]
         end
       end
@@ -169,29 +175,29 @@ defmodule Cache do
     guild_key = "guild:#{guild["id"]}:members"
     if is_nil guild["unavailable"] do
       Mongo.delete_one(:mongo, @guild_cache, %{"id": guild["id"]}, [pool: DBConnection.Poolboy])
-      {:ok, ids} = Redis.q ["HKEYS", guild_key]
+      #{:ok, ids} = Redis.q ["HKEYS", guild_key]
       Redis.q ["DEL", guild_key]
-      ids
-      |> Enum.chunk_every(1000)
-      |> Enum.each(fn(chunk) -> 
-          Redis.t fn(worker) -> 
-              for id <- chunk do
-                Redis.q worker, ["ZINCRBY", @user_zset, -1, id]
-              end
-            end
-        end)
-      # Garbage-collect when an id runs out of references
-      {:ok, prunable_users} = Redis.q ["ZRANGEBYSCORE", @user_zset, "-inf", 0]
-      Redis.q ["ZREMRANGEBYSCORE", @user_zset, "-inf", 0]
-      prunable_users
-      |> Enum.chunk_every(1000)
-      |> Enum.each(fn(chunk) -> 
-          Redis.t fn(worker) -> 
-              for id <- chunk do
-                Redis.q worker, ["HDEL", @user_hash, id]
-              end
-            end
-        end)
+      #ids
+      #|> Enum.chunk_every(1000)
+      #|> Enum.each(fn(chunk) -> 
+      #    Redis.t fn(worker) -> 
+      #        for id <- chunk do
+      #          Redis.q worker, ["ZINCRBY", @user_zset, -1, id]
+      #        end
+      #      end
+      #  end)
+      ## Garbage-collect when an id runs out of references
+      #{:ok, prunable_users} = Redis.q ["ZRANGEBYSCORE", @user_zset, "-inf", 0]
+      #Redis.q ["ZREMRANGEBYSCORE", @user_zset, "-inf", 0]
+      #prunable_users
+      #|> Enum.chunk_every(1000)
+      #|> Enum.each(fn(chunk) -> 
+      #    Redis.t fn(worker) -> 
+      #        for id <- chunk do
+      #          Redis.q worker, ["HDEL", @user_hash, id]
+      #        end
+      #      end
+      #  end)
     end
   end
 
@@ -214,15 +220,17 @@ defmodule Cache do
   defp process_event(%{"t" => "GUILD_MEMBER_ADD"} = event) do
     member = event["d"]
     update_members_and_users member["guild_id"], [member]
-    Mongo.update_one(:mongo, @guild_cache, %{"id": member["guild_id"]}, %{"$inc": %{"member_count": 1}}, [pool: DBConnection.Poolboy, upsert: true])
+    Mongo.update_one(:mongo, @guild_cache, %{"id": member["guild_id"]}, 
+      %{"$inc": %{"member_count": 1}}, [pool: DBConnection.Poolboy, upsert: true])
   end
 
   defp process_event(%{"t" => "GUILD_MEMBER_REMOVE"} = event) do
     guild_id = event["d"]["guild_id"]
     user = event["d"]["user"]
     Redis.q ["HDEL", "guild:#{guild_id}:members", user["id"]]
-    Redis.q ["ZINCRBY", @user_zset, -1, user["id"]]
-    Mongo.update_one(:mongo, @guild_cache, %{"id": guild_id}, %{"$inc": %{"member_count": -1}}, [pool: DBConnection.Poolboy, upsert: true])
+    #Redis.q ["ZINCRBY", @user_zset, -1, user["id"]]
+    Mongo.update_one(:mongo, @guild_cache, %{"id": guild_id}, 
+      %{"$inc": %{"member_count": -1}}, [pool: DBConnection.Poolboy, upsert: true])
   end
 
   defp process_event(%{"t" => "GUILD_MEMBER_UPDATE"} = event) do

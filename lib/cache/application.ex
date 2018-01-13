@@ -14,10 +14,10 @@ defmodule Cache.Application do
       # {Cache.Worker, arg},
       {Mongo, [
           name: :mongo, 
-          database: "discord-cache", # System.get_env("CACHE_DATABASE"), 
+          database: System.get_env("CACHE_DATABASE"), 
           pool: DBConnection.Poolboy, 
           # TODO: Make these env vars
-          hostname: "localhost", 
+          hostname: System.get_env("MONGO_IP"), 
           port: "27017"
         ]},
       {Lace.Redis, %{
